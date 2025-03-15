@@ -32,13 +32,41 @@ class SignalGenerator:
         # 新增宏观评分计算
         def get_macro_score(date):
             try:
-                # 获取当月CPI数据
-                cpi_month = date.strftime('%Y-%m')
-                cpi_value = DataCache.macro_data['cpi'].set_index('日期').loc[cpi_month].iloc[3]
+                # 从缓存获取数据
+                cpi_df = DataCache.macro_data['cpi']
                 
-                # 获取最近季度GDP增速
-                gdp_data = DataCache.macro_data['gdp']
-                latest_gdp = gdp_data[gdp_data['季度日期'] <= date].iloc[-1]['国内生产总值-同比增长']
+                # 转换为季度和月份用于宏观数据对齐
+                quarter = (date.month - 1) // 3 + 1
+                target_month = date.strftime("%Y年%m月")
+                
+                # 1. 获取CPI同比（月度）
+                cpi_mask = (cpi_df['日期'] >= date - pd.DateOffset(months=3)) & (cpi_df['日期'] <= date)
+                cpi_current = cpi_df[cpi_mask].iloc[-1]['全国-当月'] if any(cpi_mask) else None
+                
+                if not cpi_current:
+                    print(f"CPI数据异常：当前日期{date.strftime('%Y-%m-%d')} 最近可用数据日期{cpi_df['日期'].max().strftime('%Y-%m-%d')}")
+                    return 0.10
+                
+                cpi_score = min(max((float(cpi_current) - 2.5)/2, 0), 1)
+                
+                fx_df = DataCache.macro_data['fx']
+                pmi_df = DataCache.macro_data['pmi']
+                gdp_df = DataCache.macro_data['gdp']
+                
+                # 2. 汇率处理改用更稳定的方式
+                cny_rate = fx_df[fx_df['货币对'].str.contains('USD/CNY')].iloc[0]['买报价']
+                fx_score = 1 - abs(cny_rate - 6.8)/0.5
+                
+                # 3. 制造业PMI（月度）
+                year_month = date.strftime("%Y年%m月")
+                pmi_current = pmi_df[pmi_df['月份'] == year_month]['制造业-指数'].values
+                pmi_score = 0.0 if len(pmi_current) == 0 else (float(pmi_current[0]) - 45)/15
+                
+                # 4. GDP增速（季度）
+                quarter_str = f"{date.year}年第{quarter}季度"
+                gdp_current = gdp_df[(gdp_df['季度'].str.contains(quarter_str))]['国内生产总值-绝对值'].values
+                gdp_growth = 0.0 if len(gdp_current) < 2 else (gdp_current[0]/gdp_current[1] - 1)
+                gdp_score = min(max((gdp_growth - 4)/2, 0), 1)
                 
                 return (cpi_value * 0.6 + latest_gdp * 0.4) / 100  # 归一化处理
             except:
