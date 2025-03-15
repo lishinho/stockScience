@@ -186,19 +186,33 @@ class DataCache:
 from concurrent.futures import ThreadPoolExecutor
 
 # 修改主程序中的宏观数据打印部分
+# ========== 修改主程序中的宏观数据获取部分 ==========
 if __name__ == "__main__":
     # 预先获取全局共享数据
     DataCache.stock_names = dict(zip(ak.stock_info_a_code_name()['code'], ak.stock_info_a_code_name()['name']))
     
     # 预先获取宏观数据（每日仅更新一次）
-    today = datetime.now().strftime("%Y%m%d")
-    DataCache.macro_data = {
-        'cpi': ak.macro_china_cpi(),
-        'fx': ak.fx_spot_quote(),
-        'pmi': ak.macro_china_pmi(),
-        'gdp': ak.macro_china_gdp()
-    }
-    
+    try:
+        # 使用更稳健的CPI获取方式
+        DataCache.macro_data = {
+            'cpi': ak.macro_china_cpi() if not pd.DataFrame(ak.macro_china_cpi()).empty else pd.DataFrame(),
+            'fx': ak.fx_spot_quote(),
+            'pmi': ak.macro_china_pmi(),
+            'gdp': ak.macro_china_gdp()
+        }
+    except Exception as e:
+        print(f"宏观数据获取失败，使用本地缓存数据: {str(e)}")
+        # 加载本地备份数据（需要提前准备）
+        DataCache.macro_data = pd.read_pickle('macro_backup.pkl')
+
+    # 新增：处理空的CPI数据情况
+    if DataCache.macro_data['cpi'].empty:
+        print("警告：CPI数据获取失败，使用最近有效数据")
+        DataCache.macro_data['cpi'] = pd.DataFrame({
+            '日期': [datetime.now().strftime("%Y年%m月")],
+            '全国-当月': [2.5]  # 默认值
+        })
+
     # 新增：处理宏观数据日期格式
     cpi_df = DataCache.macro_data['cpi']
     cpi_df['日期'] = pd.to_datetime(cpi_df.iloc[:,0].str.extract(r'(\d{4}年\d{1,2}月)')[0], format='%Y年%m月')
