@@ -1,24 +1,15 @@
 import pandas as pd
 import pandas_ta as ta
 import akshare as ak
-import numpy as np  # 添加缺失的 numpy 导入
+import numpy as np
 from datetime import datetime, timedelta
+from data_resilient import DataResilient
+from cache_manager import CacheManager
 
 # ========== 数据获取模块 ==========
 def fetch_stock_data(symbol, start_date, end_date):
-    """通过AKShare获取股票历史数据（日线）"""
-    df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_date, end_date=end_date)
-    df.rename(columns={
-            '日期': 'date',
-            '开盘': 'open',
-            '收盘': 'close',
-            '最高': 'high',
-            '最低': 'low',
-            '成交量': 'volume'
-        }, inplace=True)
-    df['date'] = pd.to_datetime(df['date'])
-    df.set_index('date', inplace=True)
-    return df
+    """通过AKShare获取股票历史数据（日线）- 带缓存和重试"""
+    return DataResilient.fetch_stock_data(symbol, start_date, end_date, use_cache=True)
 
 # ========== 指标计算模块（使用 pandas_ta）==========
 def calculate_indicators(df):
@@ -97,30 +88,14 @@ def backtest_strategy(df, signals):
     return df
 
 # ========== 数据获取模块 ==========
-# ========== 新增函数 ==========
 def get_hs300_symbols():
     """获取沪深300成分股代码"""
-    try:
-        hs300 = ak.index_stock_cons(symbol="000300")
-        # 新增去重逻辑
-        hs300 = hs300.drop_duplicates(subset=['品种代码'], keep='first')  # 根据原始数据去重
-        
-        # 清理代码格式并添加交易所后缀
-        hs300['symbol'] = hs300['品种代码'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(6)
-        hs300['symbol'] = np.where(
-            hs300['symbol'].str.startswith(('0', '3')),
-            hs300['symbol'] + '.SZ',
-            hs300['symbol'] + '.SH'
-        )
-        # 最终结果二次去重
-        return hs300['symbol'].drop_duplicates().tolist()  # 修改这里
-    except Exception as e:
-        print(f"获取沪深300成分股失败: {str(e)}")
-        return []
+    return DataResilient.get_hs300_symbols(use_cache=True)
 
 # ========== 修改主程序 ==========
 if __name__ == "__main__":
-    # 获取沪深300全量股票代码
+    CacheManager.initialize()
+    
     symbols = get_hs300_symbols()
     if not symbols:
         raise ValueError("无法获取沪深300成分股数据")
@@ -128,9 +103,8 @@ if __name__ == "__main__":
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
 
-    # 获取 A 股代码和名称映射
-    stock_code_name_df = ak.stock_info_a_code_name()
-    code_name_dict = dict(zip(stock_code_name_df['code'], stock_code_name_df['name']))
+    stock_code_name_df = DataResilient.get_stock_info(use_cache=True)
+    code_name_dict = dict(zip(stock_code_name_df['code'], stock_code_name_df['name'])) if not stock_code_name_df.empty else {}
 
     results = []  # 存储所有股票结果
     
