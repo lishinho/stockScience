@@ -107,57 +107,63 @@ class SignalGenerator:
     @staticmethod
     def get_macro_score(date):
         try:
-            # 从缓存获取数据
-            cpi_df = DataCache.macro_data['cpi']
+            cpi_df = DataCache.macro_data.get('cpi')
+            if cpi_df is None or cpi_df.empty:
+                return 0.10
             
-            # 转换为季度和月份用于宏观数据对齐
+            cpi_df = pd.DataFrame(cpi_df)
+            
             quarter = (date.month - 1) // 3 + 1
             
-            # 1. 获取CPI同比（月度）
-            # 查找最近3个月的数据（处理数据延迟）
-            cpi_mask = (cpi_df['日期'] >= date - pd.DateOffset(months=3)) & (cpi_df['日期'] <= date)
-            cpi_current = cpi_df[cpi_mask].iloc[-1]['全国-当月'] if any(cpi_mask) else None
-            
-            if not cpi_current:
-                print(f"CPI数据异常：当前日期{date.strftime('%Y-%m-%d')} 最近可用数据日期{cpi_df['日期'].max().strftime('%Y-%m-%d')}")
+            if '日期' not in cpi_df.columns:
                 return 0.10
-                
-            cpi_score = min(max((float(cpi_current) - 2.5)/2, 0), 1)
             
-            fx_df = DataCache.macro_data['fx']
-            pmi_df = DataCache.macro_data['pmi']
-            gdp_df = DataCache.macro_data['gdp']
+            cpi_mask = (cpi_df['日期'] >= date - pd.DateOffset(months=3)) & (cpi_df['日期'] <= date)
             
-            # 2. 汇率处理改用更稳定的方式
-            fx_df = ak.fx_spot_quote()
-            cny_rate = fx_df[fx_df['货币对'].str.contains('USD/CNY')].iloc[0]['买报价']
-            fx_score = 1 - abs(cny_rate - 7)/0.5  # 6.7-7.3为合理区间
+            if not any(cpi_mask):
+                return 0.10
             
-            # 3. 制造业PMI（月度）
-            pmi_df = DataCache.macro_data['pmi']
-            year_month = date.strftime("%Y年%m月")  # 新增这行定义
-            pmi_current = pmi_df[pmi_df['月份'] == year_month]['制造业-指数'].values
-            pmi_score = 0.0 if len(pmi_current) == 0 else (float(pmi_current[0]) - 45)/15  # 45-60为合理区间
+            cpi_current = cpi_df[cpi_mask].iloc[-1]
+            value_columns = [col for col in cpi_df.columns if '数值' in col or '同比' in col or '当月' in col]
+            if value_columns:
+                cpi_value = cpi_current.get(value_columns[0], 2.5)
+            else:
+                cpi_value = 2.5
             
-            # 4. GDP增速（季度）
-            gdp_df = ak.macro_china_gdp()
-            # 从季度字段提取年份（原数据季度格式为"2023年4季度"）
-            gdp_df['年份'] = gdp_df['季度'].str.split('年').str[0].astype(int)
-            quarter_str = f"{date.year}年第{quarter}季度"  # 生成季度字符串匹配格式
+            cpi_value = float(cpi_value) if not pd.isnull(cpi_value) else 2.5
+            cpi_score = min(max((cpi_value - 2.5)/2, 0), 1)
             
-            # 使用季度字符串进行匹配
-            gdp_current = gdp_df[(gdp_df['季度'].str.contains(quarter_str))]['国内生产总值-绝对值'].values
+            fx_df = DataCache.macro_data.get('fx', pd.DataFrame())
+            pmi_df = DataCache.macro_data.get('pmi', pd.DataFrame())
+            gdp_df = DataCache.macro_data.get('gdp', pd.DataFrame())
             
-            gdp_growth = 0.0 if len(gdp_current) < 2 else (gdp_current[0]/gdp_current[1] - 1)
-            gdp_score = min(max((gdp_growth - 4)/2, 0), 1)  # 4%-6%为合理区间
+            if fx_df.empty or '货币对' not in fx_df.columns:
+                fx_score = 0.5
+            else:
+                cny_rate = fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)].iloc[0]['买报价'] if not fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)].empty else 7.0
+                fx_score = 1 - abs(cny_rate - 7)/0.5
             
-            # 加权综合评分（总权重0.15）
-            weights = [0.3, 0.3, 0.2, 0.2]  # CPI:30% 汇率:30% PMI:20% GDP:20%
+            if pmi_df.empty or '月份' not in pmi_df.columns:
+                pmi_score = 0.5
+            else:
+                year_month = date.strftime("%Y年%m月")
+                pmi_current = pmi_df[pmi_df['月份'] == year_month]['制造业-指数'].values
+                pmi_score = 0.0 if len(pmi_current) == 0 else (float(pmi_current[0]) - 45)/15
+            
+            if gdp_df.empty or '季度' not in gdp_df.columns:
+                gdp_score = 0.5
+            else:
+                gdp_df['年份'] = gdp_df['季度'].str.split('年').str[0].astype(int)
+                quarter_str = f"{date.year}年第{quarter}季度"
+                gdp_current = gdp_df[(gdp_df['季度'].str.contains(quarter_str, na=False))]['国内生产总值-绝对值'].values
+                gdp_growth = 0.0 if len(gdp_current) < 2 else (gdp_current[0]/gdp_current[1] - 1)
+                gdp_score = min(max((gdp_growth - 4)/2, 0), 1)
+            
+            weights = [0.3, 0.3, 0.2, 0.2]
             total_score = (cpi_score*weights[0] + fx_score*weights[1] + \
                           pmi_score*weights[2] + gdp_score*weights[3]) * 0.15
             
-            return max(min(total_score, 0.15), 0)  # 确保在0-0.15区间
+            return max(min(total_score, 0.15), 0)
             
         except Exception as e:
-            print(f"宏观数据获取失败: {str(e)}")
             return 0.10

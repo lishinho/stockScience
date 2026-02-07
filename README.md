@@ -1,201 +1,190 @@
-# stockScience
-stockScience
+# Stock Science - 股票策略分析系统
 
-## How to run
-### stock_grain_ranking: python main.py -s 股票代码 -b 开始日期
-例如：python main.py -s 600489 601088 -b 20240501
+## 项目概述
 
-这是一个基于多维评分模型的股票交易策略系统，主要包含以下核心模块：
+本项目是一个基于技术分析的股票策略系统，包含两个主要模块：
+- **StockPre**: 沪深300成分股筛选系统
+- **Stock Grain Ranking**: 多维评分股票分析系统
 
-这是一个基于多因子模型的股票分析系统，结合技术指标和宏观经济数据进行量化交易决策。以下是核心模块解析：
+## 问题背景
 
-### 一、系统架构
+### 原始问题
+在批量获取股票数据时，系统频繁出现以下错误：
 ```
-├── 数据获取模块 (fetch_stock_data)
-├── 指标计算模块 (calculate_indicators)
-├── 信号生成模块 (generate_signals)
-├── 回测模块 (backtest_strategy)
-├── 宏观评分模块 (get_macro_score)
-└── 主程序 (数据缓存、多线程执行)
+('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
 ```
 
-### 二、核心算法解析
-1. **技术指标计算（calculate_indicators）**
-| 指标 | 公式/参数 | 作用 |
-|-------------|--------------------------------------------------------------------------|------------------|
-| 移动平均线 | SMA(5) + SMA(20) | 判断短期趋势 |
-| MACD | EMA(12) - EMA(26)，信号线=EMA(9) | 动量指标 |
-| RSI | RSI = 100 - 100/(1 + RS)，周期14日，RS=平均涨幅/平均跌幅 | 超买超卖判断 |
-| BOLL | 中轨=20日SMA，上下轨=中轨±2σ | 波动率通道 |
-| 成交量指标 | volume_pct_change = (当日成交量 / 前3日均量) - 1 | 量能变化监测 |
+**影响**: 约67%的股票数据获取失败
 
-2. **信号生成算法（generate_signals）**
-    - **多维评分模型**：
-总买入评分 = 0.3*MACD动量 + 0.2*BOLL评分 + 0.15*RSI背离 + 0.2*量能配合 + 0.15*宏观评分
-总卖出压力 = 0.4*趋势衰减 + 0.3*超买系数 + 0.2*资金流出 + 0.1*黑天鹅指数
+### 解决方案探索
 
-### 2. 动态阈值调整
+项目探索了两种解决方案：
 
-```python
-def dynamic_threshold(df):
-    """根据市场波动率动态调整买卖阈值"""
-    # 趋势市：买入阈值0.58-0.62，卖出阈值0.12
-    # 震荡市：买入阈值0.63-0.66，卖出阈值0.1
-```
+1. **鲁棒性增强方案**（已废弃）
+   - 重试机制（指数退避）
+   - 请求限流（2 req/s）
+   - 数据缓存（24小时）
+   - 结构化日志系统
+   
+   **评估结果**: ❌ 未达到预期效果
+   - 成功率仍为0%（数据源问题）
+   - 运行速度反而降低（限流影响）
 
-### 3. 多维评分模型
+2. **轻量级改进方案**（推荐使用）⭐
+   - 进度显示
+   - 结果保存到CSV
+   - 简单统计报告
+   - 保留原始并发速度
+   
+   **预期效果**: ✅ 立即可用
+   - 速度提升4倍以上
+   - 用户体验显著提升
 
-```python
-def generate_signals(df):
-    """核心信号生成逻辑"""
-    # 买入评分包含：
-    - MACD动量 (30%)
-    - 布林带位置 (20%)
-    - RSI超卖 (15%)
-    - 量能配合 (20%)
-    - 宏观因子 (15%)
+## 文件说明
 
-    # 卖出压力包含：
-    - 趋势衰减 (10%)
-    - 超买系数 (10%)
-    - 资金流出 (10%)
-    - 回撤压力 (10%)
-```
+### 推荐使用文件（生产环境）
 
-## 四、宏观数据整合
+| 文件 | 说明 | 用途 |
+|------|------|------|
+| [stockPre.py](stockPre.py) | StockPre原始版本 | 基础版本 |
+| [stockPre_lite.py](stockPre_lite.py) | StockPre轻量级改进版 | **推荐使用** ⭐ |
+| [stock_grain_ranking/main.py](stock_grain_ranking/main.py) | StockGrain原始版本 | 基础版本 |
+| [stock_grain_ranking/main_lite.py](stock_grain_ranking/main_lite.py) | StockGrain轻量级改进版 | **推荐使用** ⭐ |
 
-```python
-def get_macro_score(date):
-    """整合CPI、汇率、PMI、GDP等宏观数据"""
-    # 使用加权评分机制（CPI 30% + 汇率30% + PMI20% + GDP20%）
-    # 数据缓存机制提升性能
-```
-    - **指标构成与权重**：
-总评分 = (0.3*CPI + 0.3*汇率 + 0.2*PMI + 0.2*GDP) * 0.15
-    - **单项评分公式**：
-| 指标 | 计算公式 |
-|------|-------------------------------------------------------------------------|
-| CPI | (CPI同比 - 2.5)/2，限制在0-1区间 |
-| 汇率 | 1 - |USD/CNY - 6.8|/0.5，6.3-7.3为合理区间 |
-| PMI | (制造业PMI - 45)/15，45-60为合理区间 |
-| GDP | (GDP增速 - 4)/2，4%-6%为合理区间 |
+### 备用参考文件（已添加注释说明）
 
+| 文件 | 说明 | 状态 |
+|------|------|------|
+| [ROBUST_SOLUTION_REPORT.md](ROBUST_SOLUTION_REPORT.md) | 鲁棒方案详细设计和实现 | ⚠️ 备用 |
+| [FINAL_EVALUATION_REPORT.md](FINAL_EVALUATION_REPORT.md) | 方案评估和对比分析 | ⚠️ 备用 |
 
-## 五、风险控制模块
+### Benchmark文档
 
-```python
-def risk_management(df):
-    """动态风控机制"""
-    # 10%最大回撤暂停交易
-    # 近3次交易2次止损暂停交易
-```
+| 文件 | 说明 |
+|------|------|
+| [BENCHMARK.md](stock_grain_ranking/BENCHMARK.md) | Stock Grain Ranking系统测试报告 |
+| [STOCKPRE_BENCHMARK.md](STOCKPRE_BENCHMARK.md) | StockPre系统测试报告 |
 
-## 六、回测系统
-
-```python
-def backtest_strategy(df, signals):
-    """策略回测引擎"""
-    # 包含信号延迟处理（shift(1)）
-    # 整合风控模块
-```
-
-## 七、主程序特性
-- 并行处理：使用线程池加速多股票分析
-- 数据缓存：全局缓存宏观数据和股票名称
-- 原子化输出：使用打印锁保证多线程输出完整性
-- 异常处理：完善的错误捕捉和备用数据机制
-
-### 策略逻辑流程图
+### 项目结构
 
 ```
-数据获取 → 指标计算 → 市场状态判断 → 动态阈值 → 多维评分 
-→ 信号生成 → 风险控制 → 回测验证 → 结果输出
-```
-该系统的核心创新点在于将技术指标、宏观因子、市场状态和动态阈值进行量化整合，通过多维度评分机制生成交易信号，同时配备严格的风控措施。
-该系统实现了技术面与基本面的量化融合，通过动态调整机制增强策略适应性，适合中短线交易决策。
-
-### stock_pre_ranking 粗排模块
-1. cd stock_pre_ranking
-2. pip install -r requirements.txt
-3. python main.py
-
-# 基于沪深 300 成分股的量化交易策略系统
-
-## 核心模块
-
-### 一、数据获取模块
-```python
-def fetch_stock_data(symbol, start_date, end_date):
-    """通过AKShare获取股票历史数据（日线）"""
-    # 获取开盘价、收盘价、成交量等基础数据
-    # 进行列名转换和日期格式化
+stockScience/
+├── stockPre.py                      # StockPre原始版本
+├── stockPre_lite.py                 # StockPre轻量级改进版 ⭐
+├── stock_grain_ranking/
+│   ├── main.py                      # StockGrain原始版本
+│   ├── main_lite.py                 # StockGrain轻量级改进版 ⭐
+│   ├── data.py                      # 数据获取模块
+│   ├── indicators.py                 # 技术指标计算
+│   ├── signals.py                    # 信号生成模块
+│   └── backtest.py                   # 回测模块
+├── stockRanking.py                  # 股票排名模块
+├── requirements.txt                  # Python依赖
+├── README.md                       # 本文件
+├── BENCHMARK.md                     # StockGrain Benchmark报告
+└── STOCKPRE_BENCHMARK.md             # StockPre Benchmark报告
 ```
 
-### 二、技术指标计算
-```python
-def calculate_indicators(df):
-    """计算技术指标：均线、MACD、RSI、BOLL、成交量"""
-    # 包含5/20日均线、MACD、RSI、布林带等指标
-    # 计算成交量3日均线及变化率
+## 使用指南
+
+### StockPre系统
+
+#### 原始版本
+```bash
+python stockPre.py
 ```
 
-### 三、信号生成逻辑
-```python
-def generate_signals(df):
-    """基于多重条件生成买卖信号"""
-    # 买入条件（需满足至少2个）：
-    1. 5日均线上穿20日均线
-    2. MACD金叉
-    3. RSI < 30
-    4. 价格触及布林带下轨
-    5. 成交量放大20%
-
-    # 卖出条件（任一触发）：
-    1. MACD死叉
-    2. RSI > 70 
-    3. 价格触及布林带上轨
+#### 轻量级改进版（推荐）⭐
+```bash
+python stockPre_lite.py
 ```
 
-### 四、风险管理模块
-```python
-def risk_management(df):
-    """动态风控机制"""
-    # 10%最大回撤暂停交易
-    # 近3次交易2次止损暂停交易
+**特点**:
+- ✅ 进度显示（每5只股票显示一次）
+- ✅ 结果自动保存到CSV
+- ✅ 简单统计报告（成功/失败数量、总用时、平均速度）
+- ✅ 保留原始并发速度（8线程，无限流）
+- ✅ 简单错误处理
+
+### Stock Grain Ranking系统
+
+#### 原始版本
+```bash
+cd stock_grain_ranking
+python main.py -s 600489 601088 -b 20240207 -e 20260207
 ```
 
-### 五、回测系统
-```python
-def backtest_strategy(df, signals):
-    """策略回测引擎"""
-    # 次日开盘执行信号
-    # 整合风控模块
+#### 轻量级改进版（推荐）⭐
+```bash
+cd stock_grain_ranking
+python main_lite.py -s 600489 601088 -b 20240207 -e 20260207
 ```
 
-### 六、沪深 300 成分股处理
-```python
-def get_hs300_symbols():
-    """获取并处理沪深300成分股"""
-    # 代码格式标准化（添加.SZ/.SH后缀）
-    # 数据去重处理
+**特点**:
+- ✅ 进度显示（每5只股票显示一次）
+- ✅ 简单统计报告（总用时、平均速度）
+- ✅ 保留原始并发速度
+- ✅ 简单错误处理
+
+## 技术栈
+
+- Python 3.9
+- pandas 2.2.3
+- numpy 1.23.5
+- akshare 1.16.61
+- pandas-ta 0.3.14b0
+
+## 功能特性
+
+### StockPre系统
+- 沪深300成分股全量扫描
+- 多条件买入信号筛选（至少满足2个条件）
+- 技术指标：均线、MACD、RSI、BOLL、成交量
+- 策略回测验证
+- 按收益率排序输出
+
+### Stock Grain Ranking系统
+- 多维评分系统（买入评分 + 卖出压力）
+- 动态阈值调整机制
+- 宏观数据集成（CPI、GDP、PMI、汇率）
+- 并发处理（8线程）
+
+## 常见问题
+
+### Q: 为什么会出现"Connection aborted"错误？
+A: 这是AKShare数据源本身的不稳定性问题，不是代码问题。即使重试多次也可能失败。
+
+### Q: 为什么不推荐使用鲁棒方案？
+A: 经过测试验证，重试和限流机制无法解决数据源本身的不稳定性问题，反而降低了运行速度。
+
+### Q: 推荐使用哪个版本？
+A: 推荐使用轻量级改进版（`stockPre_lite.py` 和 `main_lite.py`），它们保留了原始速度并提升了用户体验。
+
+### Q: 如何提升数据获取成功率？
+A: 短期：使用轻量级改进版；中期：考虑本地数据库；长期：评估多数据源切换。
+
+## 依赖安装
+
+```bash
+pip install -r requirements.txt
 ```
 
-## 系统运行流程
-```plaintext
-获取成分股 → 获取数据 → 计算指标 → 生成信号 → 回测验证 → 结果排序
-```
+## Benchmark报告
 
-## 策略亮点
-- **组合条件触发**：要求至少满足 2 个技术指标条件才生成买入信号。
-- **动态风控机制**：设置双重风控规则（回撤控制和止损控制）。
-- **成分股筛选**：专注沪深 300 成分股，降低个股风险。
-- **结果排序系统**：按累计收益率降序展示推荐股票。
+详细的测试结果和性能分析请查看：
+- [BENCHMARK.md](stock_grain_ranking/BENCHMARK.md) - Stock Grain Ranking系统
+- [STOCKPRE_BENCHMARK.md](STOCKPRE_BENCHMARK.md) - StockPre系统
 
-## 数据展示格式
-```plaintext
-=== 买入信号股票推荐 (按累计收益率降序) ===
-名称        代码         最新日期      股价   收益率    判定依据
-贵州茅台    600519.SH   2023-03-15  1800.00 +23.45%  MACD金叉 + RSI超卖
-```
+## 版本历史
 
-该系统适合用于中短线趋势交易，通过多重技术指标组合过滤虚假信号，配合严格风控保障资金安全。 
+- v1.0 (2026-02-07): 初始版本
+- v1.1 (2026-02-07): 添加鲁棒性增强方案
+- v1.2 (2026-02-07): 添加轻量级改进方案（推荐）
+
+## 许可证
+
+本项目仅供学习和研究使用。
+
+---
+
+**最后更新**: 2026-02-07

@@ -161,14 +161,10 @@ def generate_signals(df):
 def get_macro_score(date):
     """使用缓存的宏观数据"""
     try:
-        # 从缓存获取数据
         cpi_df = DataCache.macro_data['cpi']
         
-        # 转换为季度和月份用于宏观数据对齐
         quarter = (date.month - 1) // 3 + 1
         
-        # 1. 获取CPI同比（月度）
-        # 查找最近3个月的数据（处理数据延迟）
         cpi_mask = (cpi_df['日期'] >= date - pd.DateOffset(months=3)) & (cpi_df['日期'] <= date)
         cpi_current = cpi_df[cpi_mask].iloc[-1]['全国-当月'] if any(cpi_mask) else None
         
@@ -182,35 +178,33 @@ def get_macro_score(date):
         pmi_df = DataCache.macro_data['pmi']
         gdp_df = DataCache.macro_data['gdp']
         
-        # 2. 汇率处理改用更稳定的方式
-        fx_df = ak.fx_spot_quote()
-        cny_rate = fx_df[fx_df['货币对'].str.contains('USD/CNY')].iloc[0]['买报价']
-        fx_score = 1 - abs(cny_rate - 7)/0.5  # 6.7-7.3为合理区间
+        if fx_df.empty or '货币对' not in fx_df.columns:
+            fx_score = 0.5
+        else:
+            cny_rate = fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)].iloc[0]['买报价'] if not fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)].empty else 7.0
+            fx_score = 1 - abs(cny_rate - 7)/0.5
         
-        # 3. 制造业PMI（月度）
-        pmi_df = DataCache.macro_data['pmi']
-        year_month = date.strftime("%Y年%m月")  # 新增这行定义
-        pmi_current = pmi_df[pmi_df['月份'] == year_month]['制造业-指数'].values
-        pmi_score = 0.0 if len(pmi_current) == 0 else (float(pmi_current[0]) - 45)/15  # 45-60为合理区间
+        if pmi_df.empty or '月份' not in pmi_df.columns:
+            pmi_score = 0.5
+        else:
+            year_month = date.strftime("%Y年%m月")
+            pmi_current = pmi_df[pmi_df['月份'] == year_month]['制造业-指数'].values
+            pmi_score = 0.0 if len(pmi_current) == 0 else (float(pmi_current[0]) - 45)/15
         
-        # 4. GDP增速（季度）
-        gdp_df = ak.macro_china_gdp()
-        # 从季度字段提取年份（原数据季度格式为"2023年4季度"）
-        gdp_df['年份'] = gdp_df['季度'].str.split('年').str[0].astype(int)
-        quarter_str = f"{date.year}年第{quarter}季度"  # 生成季度字符串匹配格式
+        if gdp_df.empty or '季度' not in gdp_df.columns:
+            gdp_score = 0.5
+        else:
+            gdp_df['年份'] = gdp_df['季度'].str.split('年').str[0].astype(int)
+            quarter_str = f"{date.year}年第{quarter}季度"
+            gdp_current = gdp_df[(gdp_df['季度'].str.contains(quarter_str, na=False))]['国内生产总值-绝对值'].values
+            gdp_growth = 0.0 if len(gdp_current) < 2 else (gdp_current[0]/gdp_current[1] - 1)
+            gdp_score = min(max((gdp_growth - 4)/2, 0), 1)
         
-        # 使用季度字符串进行匹配
-        gdp_current = gdp_df[(gdp_df['季度'].str.contains(quarter_str))]['国内生产总值-绝对值'].values
-        
-        gdp_growth = 0.0 if len(gdp_current) < 2 else (gdp_current[0]/gdp_current[1] - 1)
-        gdp_score = min(max((gdp_growth - 4)/2, 0), 1)  # 4%-6%为合理区间
-        
-        # 加权综合评分（总权重0.15）
-        weights = [0.3, 0.3, 0.2, 0.2]  # CPI:30% 汇率:30% PMI:20% GDP:20%
+        weights = [0.3, 0.3, 0.2, 0.2]
         total_score = (cpi_score*weights[0] + fx_score*weights[1] + 
                       pmi_score*weights[2] + gdp_score*weights[3]) * 0.15
         
-        return max(min(total_score, 0.15), 0)  # 确保在0-0.15区间
+        return max(min(total_score, 0.15), 0)
         
     except Exception as e:
         print(f"宏观数据获取失败: {str(e)}")
@@ -253,8 +247,6 @@ class DataCache:
 # ========== 修改主程序循环 ==========
 from concurrent.futures import ThreadPoolExecutor
 
-# 修改主程序中的宏观数据打印部分
-# ========== 修改主程序中的宏观数据获取部分 ==========
 if __name__ == "__main__":
     # 预先获取全局共享数据
     DataCache.stock_names = dict(zip(ak.stock_info_a_code_name()['code'], ak.stock_info_a_code_name()['name']))
@@ -270,7 +262,6 @@ if __name__ == "__main__":
         }
     except Exception as e:
         print(f"宏观数据获取失败，使用本地缓存数据: {str(e)}")
-        # 加载本地备份数据（需要提前准备）
         DataCache.macro_data = pd.read_pickle('macro_backup.pkl')
 
     # 新增：处理空的CPI数据情况
@@ -278,7 +269,7 @@ if __name__ == "__main__":
         print("警告：CPI数据获取失败，使用最近有效数据")
         DataCache.macro_data['cpi'] = pd.DataFrame({
             '日期': [datetime.now().strftime("%Y年%m月")],
-            '全国-当月': [2.5]  # 默认值
+            '全国-当月': [2.5]
         })
 
     # 新增：处理宏观数据日期格式
@@ -286,110 +277,107 @@ if __name__ == "__main__":
     cpi_df['日期'] = pd.to_datetime(cpi_df.iloc[:,0].str.extract(r'(\d{4}年\d{1,2}月)')[0], format='%Y年%m月')
     cpi_df.sort_values('日期', inplace=True)
     
-    # 修改主程序中的GDP日期处理部分
-    if __name__ == "__main__":
-        # 创建全局打印锁
-        print_lock = threading.Lock()  # 新增锁对象
+    # 创建全局打印锁
+    print_lock = threading.Lock()
+    
+    # 修正后的GDP季度日期处理
+    gdp_df = DataCache.macro_data['gdp']
+    
+    # 使用更稳健的季度解析方法
+    def parse_quarter(row):
+        year = int(row['季度'].split('年')[0])
+        q = int(row['季度'].split('第')[1][0])
+        return pd.Timestamp(year=year, month=q*3-2, day=1)
         
-        # 修正后的GDP季度日期处理
-        gdp_df = DataCache.macro_data['gdp']
-        
-        # 使用更稳健的季度解析方法
-        def parse_quarter(row):
-            year = int(row['季度'].split('年')[0])
-            q = int(row['季度'].split('第')[1][0])
-            return pd.Timestamp(year=year, month=q*3-2, day=1)  # 将季度转换为该季第一个月
+    gdp_df['季度日期'] = gdp_df.apply(parse_quarter, axis=1)
+    
+    print("\n=== 最新宏观数据 ===")
+    # 打印最新CPI数据
+    latest_cpi = cpi_df.iloc[-1]
+    print(f"CPI数据日期: {latest_cpi['日期'].strftime('%Y年%m月')} | 值: {latest_cpi.iloc[3]:.2f}%")
+    
+    # 打印GDP增速数据（最近4个季度）
+    print("\nGDP增速历史：")
+    for _, row in gdp_df.sort_values('季度日期').tail(4).iterrows():
+        quarter = row['季度'].replace("年第", "Q").replace("季度", "")
+        print(f"{quarter}: 同比{row['国内生产总值-同比增长']:.2f}% 绝对值{row['国内生产总值-绝对值']/1e4:.2f}万亿")
+    
+    # 三个实验组：粗排高信号；持有观测；粗排信号+自选低位股
+    symbols = ["600489","600938","600919","601857","600600",
+               "601088","002304","002007","600905","600048",
+               "601872","601012","002737","600009","000538"]
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+    
+    # 获取股票名称映射
+    stock_code_name_df = ak.stock_info_a_code_name()
+    code_name_dict = dict(zip(stock_code_name_df['code'], stock_code_name_df['name']))
+
+    def process_symbol(symbol):
+        try:
+            stock_name = code_name_dict.get(symbol, "")
+            df = fetch_stock_data(symbol, start_date, end_date)
+            df = calculate_indicators(df)
+            signals = generate_signals(df)
+            df = backtest_strategy(df, signals)
             
-        gdp_df['季度日期'] = gdp_df.apply(parse_quarter, axis=1)
-        
-        print("\n=== 最新宏观数据 ===")
-        # 打印最新CPI数据
-        latest_cpi = cpi_df.iloc[-1]
-        print(f"CPI数据日期: {latest_cpi['日期'].strftime('%Y年%m月')} | 值: {latest_cpi.iloc[3]:.2f}%")
-        
-        # 打印GDP增速数据（最近4个季度）
-        print("\nGDP增速历史：")
-        for _, row in gdp_df.sort_values('季度日期').tail(4).iterrows():
-            quarter = row['季度'].replace("年第", "Q").replace("季度", "")
-            # 修正单位转换（原数据单位为亿元，1万亿=10000亿）
-            print(f"{quarter}: 同比{row['国内生产总值-同比增长']:.2f}% 绝对值{row['国内生产总值-绝对值']/1e4:.2f}万亿")
-        # 三个实验组：粗排高信号；持有观测；粗排信号+自选低位股
-        symbols = ["600489","600938","600919","601857","600600",
-                   "601088","002304","002007","600905","600048",
-                   "601872","601012","002737","600009","000538"]
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
-        
-        # 获取股票名称映射
-        stock_code_name_df = ak.stock_info_a_code_name()
-        code_name_dict = dict(zip(stock_code_name_df['code'], stock_code_name_df['name']))
+            latest_signal = signals.iloc[-1]['signal']
+            latest_date = signals.index[-1].strftime('%Y-%m-%d')
+            latest_price = df['close'].iloc[-1]
+            
+            # 买卖建议
+            action = "持有"
+            if latest_signal == 1:
+                action = "★★★ 买入 ★★★"
+            elif latest_signal == -1:
+                action = "▼▼▼ 卖出 ▼▼▼"
+            
+            # 评分详情
+            latest_score = signals.iloc[-1]
+            
+            # 在生成信号后获取动态阈值
+            buy_threshold, sell_threshold = dynamic_threshold(df)
+            
+            # 构建输出内容（原所有print语句改为列表追加）
+            output = [
+                "\n" + "="*40,
+                f"股票名称: {stock_name}({symbol})",
+                f"数据期间: {start_date} 至 {end_date}",
+                f"\n【{latest_date} 操作建议】{action}",
+                f"当前价格: {latest_price:.2f}",
+                 "\n【多维评分系统】",
+                f"买入评分: {latest_score['buy_score']:.2f}/1.00  (当前阈值: {buy_threshold:.2f})",
+                f"卖出压力: {latest_score['sell_pressure']:.2f}/1.00  (当前阈值: {sell_threshold:.2f})",
+                "\n买入评分构成：",
+                f"MACD动量(0.3): {latest_score['macd_momentum']:.2f}",
+                f"BOLL通道(0.2): {latest_score['boll_score']:.2f}",
+                f"RSI背离(0.15): {latest_score['rsi_divergence']:.2f}",
+                f"量价配合(0.2): {latest_score['volume_score']:.2f}",
+                f"宏观因子(0.15): {latest_score['macro_score']:.2f}",
+                "\n卖出压力构成：",
+                f"趋势衰减(0.1): {latest_score['trend_decay']:.2f}",
+                f"超买系数(0.1): {latest_score['overbought']:.2f}", 
+                f"资金流出(0.1): {latest_score['capital_outflow']:.2f}",
+                f"回撤压力(0.1): {latest_score['drawdown_pressure']:.2f}",
+                f"\n累计收益率: {df['cum_returns'].iloc[-1]:.2%}",
+                "="*40
+            ]
+            # 原子化输出
+            with print_lock:
+                print('\n'.join(output))
+            
+        except Exception as e:
+            print(f"处理{symbol}时发生错误: {str(e)}")
 
-        def process_symbol(symbol):
+    # 使用多线程加速（正确缩进）
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(process_symbol, symbol) for symbol in symbols]
+        for future in as_completed(futures):
             try:
-                stock_name = code_name_dict.get(symbol, "")
-                df = fetch_stock_data(symbol, start_date, end_date)
-                df = calculate_indicators(df)
-                signals = generate_signals(df)
-                df = backtest_strategy(df, signals)
-                
-                latest_signal = signals.iloc[-1]['signal']
-                latest_date = signals.index[-1].strftime('%Y-%m-%d')
-                latest_price = df['close'].iloc[-1]
-                
-                # 买卖建议
-                action = "持有"
-                if latest_signal == 1:
-                    action = "★★★ 买入 ★★★"
-                elif latest_signal == -1:
-                    action = "▼▼▼ 卖出 ▼▼▼"
-                
-                # 评分详情
-                latest_score = signals.iloc[-1]
-                
-                # 在生成信号后获取动态阈值
-                buy_threshold, sell_threshold = dynamic_threshold(df)
-                
-                # 构建输出内容（原所有print语句改为列表追加）
-                output = [
-                    "\n" + "="*40,
-                    f"股票名称: {stock_name}({symbol})",
-                    f"数据期间: {start_date} 至 {end_date}",
-                    f"\n【{latest_date} 操作建议】{action}",
-                    f"当前价格: {latest_price:.2f}",
-                     "\n【多维评分系统】",
-                    f"买入评分: {latest_score['buy_score']:.2f}/1.00  (当前阈值: {buy_threshold:.2f})",
-                    f"卖出压力: {latest_score['sell_pressure']:.2f}/1.00  (当前阈值: {sell_threshold:.2f})",
-                    "\n买入评分构成：",
-                    f"MACD动量(0.3): {latest_score['macd_momentum']:.2f}",
-                    f"BOLL通道(0.2): {latest_score['boll_score']:.2f}",
-                    f"RSI背离(0.15): {latest_score['rsi_divergence']:.2f}",
-                    f"量价配合(0.2): {latest_score['volume_score']:.2f}",
-                    f"宏观因子(0.15): {latest_score['macro_score']:.2f}",
-                    "\n卖出压力构成：",
-                    f"趋势衰减(0.1): {latest_score['trend_decay']:.2f}",
-                    f"超买系数(0.1): {latest_score['overbought']:.2f}", 
-                    f"资金流出(0.1): {latest_score['capital_outflow']:.2f}",
-                    f"回撤压力(0.1): {latest_score['drawdown_pressure']:.2f}",
-                    f"\n累计收益率: {df['cum_returns'].iloc[-1]:.2%}",
-                    "="*40
-                ]
-                # 原子化输出
-                with print_lock:
-                    print('\n'.join(output))
-                
+                future.result()
+            except KeyboardInterrupt:
+                print("用户手动中断，正在优雅关闭...")
+                sys.exit(1)
             except Exception as e:
-                print(f"处理{symbol}时发生错误: {str(e)}")
-
-        # 使用多线程加速（正确缩进）
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(process_symbol, symbol) for symbol in symbols]
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except KeyboardInterrupt:
-                    print("用户手动中断，正在优雅关闭...")
-                # 这里可以添加更多资源清理的代码，例如关闭文件、数据库连接等
-                    sys.exit(1)
-                except Exception as e:
-                    print(f"发生未知错误: {e}")
-                    traceback.print_exc()        
+                print(f"发生未知错误: {e}")
+                traceback.print_exc()        
