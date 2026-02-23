@@ -2,27 +2,47 @@ import pandas as pd
 import numpy as np
 from data import DataCache
 
-"""信号生成模块"""
 class SignalGenerator:
-    # ========== 新增市场状态评估函数 ==========
     @staticmethod
     def market_regime(df):
-        """评估市场状态 (震荡/趋势)"""
-        adx = df.ta.adx(length=14)
-        return "trend" if adx['ADX_14'].iloc[-1] > 25 else "range"
+        """评估市场状态 (震荡/趋势) - 使用原生pandas计算ADX"""
+        try:
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            
+            tr = pd.DataFrame({
+                'hl': high - low,
+                'hc': abs(high - close.shift(1)),
+                'lc': abs(low - close.shift(1))
+            }).max(axis=1)
+            
+            atr = tr.rolling(14).mean()
+            
+            plus_dm = high.diff()
+            minus_dm = -low.diff()
+            plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+            minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+            
+            plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
+            minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
+            
+            dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+            adx = dx.rolling(14).mean()
+            
+            return "trend" if adx.iloc[-1] > 25 else "range"
+        except:
+            return "range"
 
-    # ========== 修改动态阈值函数 ==========
     @staticmethod
     def dynamic_threshold(df):
         """双阈值动态调整机制"""
         regime = SignalGenerator.market_regime(df)
         volatility = df['close'].pct_change().std() * 100
         
-        # 趋势市场参数
         if regime == "trend":
             buy_thresh = 0.62 if volatility > 3 else 0.58
             sell_thresh = 0.12
-        # 震荡市场参数
         else:
             buy_thresh = 0.66 if volatility > 3 else 0.63
             sell_thresh = 0.1
@@ -140,8 +160,15 @@ class SignalGenerator:
             if fx_df.empty or '货币对' not in fx_df.columns:
                 fx_score = 0.5
             else:
-                cny_rate = fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)].iloc[0]['买报价'] if not fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)].empty else 7.0
-                fx_score = 1 - abs(cny_rate - 7)/0.5
+                usd_cny = fx_df[fx_df['货币对'].str.contains('USD/CNY', na=False)]
+                if usd_cny.empty or '买报价' not in usd_cny.columns:
+                    fx_score = 0.5
+                else:
+                    cny_rate = usd_cny.iloc[0]['买报价']
+                    if pd.isna(cny_rate):
+                        fx_score = 0.5
+                    else:
+                        fx_score = 1 - abs(cny_rate - 7)/0.5
             
             if pmi_df.empty or '月份' not in pmi_df.columns:
                 pmi_score = 0.5

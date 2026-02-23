@@ -2,10 +2,31 @@ import pandas as pd
 import akshare as ak
 import time
 import random
+import threading
 from datetime import datetime
 from cache_manager import CacheManager
 
+class RequestLimiter:
+    _instance = None
+    _lock = threading.Lock()
+    _last_request_time = 0
+    _min_interval = 0.5
+    
+    @classmethod
+    def acquire(cls):
+        with cls._lock:
+            current_time = time.time()
+            elapsed = current_time - cls._last_request_time
+            if elapsed < cls._min_interval:
+                wait_time = cls._min_interval - elapsed + random.uniform(0.1, 0.3)
+                time.sleep(wait_time)
+            cls._last_request_time = time.time()
+
 class DataResilient:
+    MAX_RETRIES = 5
+    BASE_DELAY = 1.0
+    MAX_DELAY = 10.0
+    
     @staticmethod
     def fetch_stock_data(symbol: str, start_date: str, end_date: str, use_cache: bool = True) -> pd.DataFrame:
         if use_cache:
@@ -21,9 +42,13 @@ class DataResilient:
         return df
     
     @staticmethod
-    def _fetch_with_retry(symbol: str, start_date: str, end_date: str, max_retries: int = 3) -> pd.DataFrame:
-        for attempt in range(max_retries + 1):
+    def _fetch_with_retry(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        last_exception = None
+        
+        for attempt in range(DataResilient.MAX_RETRIES):
             try:
+                RequestLimiter.acquire()
+                
                 df = ak.stock_zh_a_hist(
                     symbol=symbol,
                     period="daily",
@@ -49,9 +74,10 @@ class DataResilient:
                 return df
                 
             except Exception as e:
-                if attempt < max_retries:
-                    delay = random.uniform(1, 3)
-                    print(f"重试获取 {symbol} (第{attempt + 1}次) - 延迟 {delay:.1f}秒...")
+                last_exception = e
+                if attempt < DataResilient.MAX_RETRIES - 1:
+                    delay = min(DataResilient.BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), DataResilient.MAX_DELAY)
+                    print(f"重试获取 {symbol} (第{attempt + 1}次) - 延迟 {delay:.1f}秒... 错误: {str(e)[:50]}")
                     time.sleep(delay)
                 else:
                     print(f"获取 {symbol} 失败: {str(e)}")
@@ -72,7 +98,7 @@ class DataResilient:
         return df
     
     @staticmethod
-    def _fetch_macro_with_retry(data_type: str, max_retries: int = 3) -> pd.DataFrame:
+    def _fetch_macro_with_retry(data_type: str) -> pd.DataFrame:
         fetch_functions = {
             'cpi': lambda: ak.macro_china_cpi(),
             'gdp': lambda: ak.macro_china_gdp(),
@@ -83,8 +109,12 @@ class DataResilient:
         if data_type not in fetch_functions:
             raise ValueError(f"不支持的宏观数据类型: {data_type}")
         
-        for attempt in range(max_retries + 1):
+        last_exception = None
+        
+        for attempt in range(DataResilient.MAX_RETRIES):
             try:
+                RequestLimiter.acquire()
+                
                 df = fetch_functions[data_type]()
                 
                 if df is None:
@@ -93,13 +123,16 @@ class DataResilient:
                 return df
                 
             except Exception as e:
-                if attempt < max_retries:
-                    delay = random.uniform(1, 3)
+                last_exception = e
+                if attempt < DataResilient.MAX_RETRIES - 1:
+                    delay = min(DataResilient.BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), DataResilient.MAX_DELAY)
                     print(f"重试获取 {data_type} 数据 (第{attempt + 1}次) - 延迟 {delay:.1f}秒...")
                     time.sleep(delay)
                 else:
                     print(f"获取 {data_type} 数据失败: {str(e)}")
                     return pd.DataFrame()
+        
+        return pd.DataFrame()
     
     @staticmethod
     def get_stock_info(use_cache: bool = True) -> pd.DataFrame:
@@ -110,16 +143,25 @@ class DataResilient:
             if cached_data is not None:
                 return cached_data
         
-        try:
-            df = ak.stock_info_a_code_name()
-            
-            if use_cache and df is not None and not df.empty:
-                CacheManager.save_macro_cache(cache_key, df)
-            
-            return df
-        except Exception as e:
-            print(f"获取股票信息失败: {str(e)}")
-            return pd.DataFrame()
+        for attempt in range(DataResilient.MAX_RETRIES):
+            try:
+                RequestLimiter.acquire()
+                df = ak.stock_info_a_code_name()
+                
+                if use_cache and df is not None and not df.empty:
+                    CacheManager.save_macro_cache(cache_key, df)
+                
+                return df
+            except Exception as e:
+                if attempt < DataResilient.MAX_RETRIES - 1:
+                    delay = min(DataResilient.BASE_DELAY * (2 ** attempt), DataResilient.MAX_DELAY)
+                    print(f"重试获取股票信息 (第{attempt + 1}次) - 延迟 {delay:.1f}秒...")
+                    time.sleep(delay)
+                else:
+                    print(f"获取股票信息失败: {str(e)}")
+                    return pd.DataFrame()
+        
+        return pd.DataFrame()
     
     @staticmethod
     def get_hs300_symbols(use_cache: bool = True) -> list:
@@ -130,17 +172,26 @@ class DataResilient:
             if cached_data is not None:
                 return cached_data
         
-        try:
-            hs300 = ak.index_stock_cons(symbol="000300")
-            hs300 = hs300.drop_duplicates(subset=['品种代码'], keep='first')
-            hs300['symbol'] = hs300['品种代码'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(6)
-            hs300['symbol'] = hs300['symbol'].apply(lambda x: f"{x}.SZ" if x.startswith(('0','3')) else f"{x}.SH")
-            symbols = hs300['symbol'].drop_duplicates().tolist()
-            
-            if use_cache:
-                CacheManager.save_macro_cache(cache_key, symbols)
-            
-            return symbols
-        except Exception as e:
-            print(f"获取沪深300成分股失败: {str(e)}")
-            return []
+        for attempt in range(DataResilient.MAX_RETRIES):
+            try:
+                RequestLimiter.acquire()
+                hs300 = ak.index_stock_cons(symbol="000300")
+                hs300 = hs300.drop_duplicates(subset=['品种代码'], keep='first')
+                hs300['symbol'] = hs300['品种代码'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(6)
+                hs300['symbol'] = hs300['symbol'].apply(lambda x: f"{x}.SZ" if x.startswith(('0','3')) else f"{x}.SH")
+                symbols = hs300['symbol'].drop_duplicates().tolist()
+                
+                if use_cache:
+                    CacheManager.save_macro_cache(cache_key, symbols)
+                
+                return symbols
+            except Exception as e:
+                if attempt < DataResilient.MAX_RETRIES - 1:
+                    delay = min(DataResilient.BASE_DELAY * (2 ** attempt), DataResilient.MAX_DELAY)
+                    print(f"重试获取沪深300成分股 (第{attempt + 1}次) - 延迟 {delay:.1f}秒...")
+                    time.sleep(delay)
+                else:
+                    print(f"获取沪深300成分股失败: {str(e)}")
+                    return []
+        
+        return []

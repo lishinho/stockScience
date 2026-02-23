@@ -1,47 +1,42 @@
 import pandas as pd
-import pandas_ta as ta
-import akshare as ak
 import numpy as np
+import akshare as ak
 from datetime import datetime, timedelta
 from data_resilient import DataResilient
 from cache_manager import CacheManager
 
-# ========== 数据获取模块 ==========
 def fetch_stock_data(symbol, start_date, end_date):
     """通过AKShare获取股票历史数据（日线）- 带缓存和重试"""
     return DataResilient.fetch_stock_data(symbol, start_date, end_date, use_cache=True)
 
-# ========== 指标计算模块（使用 pandas_ta）==========
 def calculate_indicators(df):
     """计算技术指标：均线、MACD、RSI、BOLL、成交量"""
-    # 均线 (5日, 20日)
-    df['ma5'] = df.ta.sma(length=5)
-    df['ma20'] = df.ta.sma(length=20)
+    if df is None or df.empty:
+        return df
     
-    # MACD (默认参数：fast=12, slow=26, signal=9)
-    macd = df.ta.macd(fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd], axis=1)
+    df = df.copy()
     
-    # RSI (14日)
-    df['rsi'] = df.ta.rsi(length=14)
+    df['ma5'] = df['close'].rolling(5).mean()
+    df['ma20'] = df['close'].rolling(20).mean()
     
-    # BOLL (20日)
-    boll = df.ta.bbands(length=20)
-    df = pd.concat([df, boll], axis=1)
+    ema12 = df['close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = ema12 - ema26
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     
-    # 成交量变化率（3日平均）
-    df['volume_ma3'] = df['volume'].rolling(window=3).mean()
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    df['boll_mid'] = df['close'].rolling(20).mean()
+    df['boll_std'] = df['close'].rolling(20).std()
+    df['boll_upper'] = df['boll_mid'] + 2 * df['boll_std']
+    df['boll_lower'] = df['boll_mid'] - 2 * df['boll_std']
+    
+    df['volume_ma3'] = df['volume'].rolling(3).mean()
     df['volume_pct_change'] = (df['volume'] / df['volume_ma3'].shift(1)) - 1
-    
-    # 清理列名
-    df.rename(columns={
-        'MACD_12_26_9': 'macd',
-        'MACDs_12_26_9': 'macd_signal',
-        'MACDh_12_26_9': 'macd_hist',
-        'BBL_20_2.0': 'boll_lower',
-        'BBM_20_2.0': 'boll_mid',
-        'BBU_20_2.0': 'boll_upper'
-    }, inplace=True)
     
     return df
 

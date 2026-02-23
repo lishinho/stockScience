@@ -9,11 +9,21 @@ class CacheManager:
     STOCK_CACHE_DIR = CACHE_DIR / "stock"
     MACRO_CACHE_DIR = CACHE_DIR / "macro"
     CACHE_EXPIRE_HOURS = 24
+    _initialized = False
     
     @classmethod
     def initialize(cls):
+        if cls._initialized:
+            return
         cls.STOCK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cls.MACRO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cls._initialized = True
+        print(f"✅ 缓存目录初始化完成: {cls.CACHE_DIR.absolute()}")
+    
+    @classmethod
+    def _ensure_initialized(cls):
+        if not cls._initialized:
+            cls.initialize()
     
     @classmethod
     def get_cache_key(cls, symbol: str, start_date: str, end_date: str) -> str:
@@ -40,6 +50,7 @@ class CacheManager:
     
     @classmethod
     def load_stock_cache(cls, symbol: str, start_date: str, end_date: str) -> Optional[Any]:
+        cls._ensure_initialized()
         cache_path = cls.get_stock_cache_path(symbol, start_date, end_date)
         
         if not cls.is_cache_valid(cache_path):
@@ -54,6 +65,7 @@ class CacheManager:
     
     @classmethod
     def save_stock_cache(cls, symbol: str, start_date: str, end_date: str, data: Any):
+        cls._ensure_initialized()
         cache_path = cls.get_stock_cache_path(symbol, start_date, end_date)
         
         try:
@@ -64,6 +76,7 @@ class CacheManager:
     
     @classmethod
     def load_macro_cache(cls, data_type: str) -> Optional[Any]:
+        cls._ensure_initialized()
         cache_path = cls.get_macro_cache_path(data_type)
         
         if not cls.is_cache_valid(cache_path):
@@ -78,6 +91,7 @@ class CacheManager:
     
     @classmethod
     def save_macro_cache(cls, data_type: str, data: Any):
+        cls._ensure_initialized()
         cache_path = cls.get_macro_cache_path(data_type)
         
         try:
