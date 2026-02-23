@@ -7,8 +7,22 @@ stock_pre_ranking/__pycache__/backtest.cpython-39.pyc
 stock_pre_ranking/__pycache__/data.cpython-39.pyc
 stock_pre_ranking/__pycache__/indicators.cpython-39.pyc
 stock_pre_ranking/__pycache__/signals.cpython-39.pyc
-__pycache__/stockPre.cpython-39.pyc
-__pycache__/stockRanking.cpython-39.pyc
+__pycache__/**
 stock_grain_ranking/__pycache__/main.cpython-39.pyc
 stock_pre_ranking/__pycache__/main.cpython-39.pyc
-.trae/documents/plan_20260207_040244.md
+.trae/documents/*
+
+# Cache directories
+cache/
+stock_grain_ranking/cache/
+stock_pre_ranking/cache/
+web/cache/
+
+# Log files
+logs/
+*.log
+
+# Python cache
+*.pyc
+*.pyo
+__pycache__/
